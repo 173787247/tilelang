@@ -1,3 +1,24 @@
+> **Correction, 2026-10-04.** An earlier revision of this file — and the comment
+> that links to it — claimed this repository has "190 `run_*` functions ... that
+> pytest never collects", and that this is how a wrong change once passed a green
+> run. **Both parts are wrong.**
+>
+> Measured: there are **187** `run_*` functions, and **169 of them are called**
+> by a `test_*` function in the same file, so they do run. Only **18** are never
+> called. A `run_*` is worth knowing about because pytest does not collect it
+> *directly*, but it is nowhere near the blind spot claimed.
+>
+> The wrong change in question — a cluster guard on the `tvm_ffi` backend — would
+> have been caught by `test_tilelang_language_cluster.py`: its
+> `run_tvm_ffi_cluster_launch()` is called at line 117 and asserts the launch
+> arguments. It was missed because **that file was not run**, not because the
+> assertion never runs. Editing a file's test list is the mistake; there is no
+> infrastructure excuse for it.
+>
+> Everything else in this file stands.
+
+---
+
 # Verification sweep — 23 pull requests against a single machine
 
 This is the contributor's own check of the contributions referenced from
