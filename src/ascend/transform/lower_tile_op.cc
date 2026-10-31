@@ -195,6 +195,21 @@ private:
 
 class LowerTileOpPass : arith::IRMutatorWithAnalyzer {
 public:
+  // Skip branches whose predicate is statically dead. Without this, a tile op
+  // inside an unsatisfiable condition (for example the tail guard
+  // `n >= 33 && n <= 32` produced for an empty loop) is still lowered, and
+  // per-op capacity checks reject a copy that can never execute.
+  Stmt VisitStmt_(const IfThenElseNode *op) override {
+    if (analyzer_->CanProve(!op->condition)) {
+      return op->else_case.defined() ? VisitStmt(op->else_case.value())
+                                     : Evaluate(0);
+    }
+    if (analyzer_->CanProve(op->condition)) {
+      return VisitStmt(op->then_case);
+    }
+    return arith::IRMutatorWithAnalyzer::VisitStmt_(op);
+  }
+
   static PrimFunc Substitute(PrimFunc f) {
     arith::Analyzer analyzer;
     LowerTileOpPass substituter(&analyzer);
