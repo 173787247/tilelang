@@ -96,3 +96,82 @@ def test_without_kernel_cache_bypasses_the_jit_wrapper_caches(monkeypatch):
 
 if __name__ == "__main__":
     tilelang.testing.main()
+
+
+def test_without_kernel_cache_releases_scoped_wrapper_entries(monkeypatch):
+    """Scoped wrapper entries must not outlive the scope."""
+    monkeypatch.setattr(vars(type(env))["TILELANG_DISABLE_CACHE"], "_forced_value", "0")
+    _set_cache_state(True)
+
+    def fake_compile(self, *args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(JITImpl, "compile", fake_compile)
+
+    @tilelang.jit(out_idx=-1, target="c")
+    def build(N):
+        @T.prim_func
+        def main(A: T.Tensor((N,), "float32"), B: T.Tensor((N,), "float32"), C: T.Tensor((N,), "float32")):
+            with T.Kernel(1, threads=128):
+                for i in T.Parallel(N):
+                    C[i] = A[i] + B[i]
+
+        return main
+
+    baseline = build(128)
+    with tilelang.testing.without_kernel_cache():
+        build(128)
+
+    assert build(128) is baseline
+    assert not any(isinstance(key, tuple) and len(key) == 2 and isinstance(key[0], int)
+                   for key in build._kernel_cache)
+    assert not any(isinstance(key, tuple) and len(key) == 3 and isinstance(key[2], int) and key[2] != 0
+                   for key in build._call_form_cache.entries)
+
+
+def test_without_kernel_cache_scopes_can_exit_out_of_order():
+    """Overlapping scopes keep the original state and clean up independently."""
+    initially_enabled = CacheState.is_enabled()
+    first = CacheState.begin_scope()
+    second = CacheState.begin_scope()
+    try:
+        assert CacheState.is_enabled() is False
+        CacheState.end_scope(first)
+        assert CacheState.is_enabled() is False
+    finally:
+        CacheState.end_scope(second)
+    assert CacheState.is_enabled() is initially_enabled
+
+
+def test_without_kernel_cache_preserves_body_exception(monkeypatch):
+    monkeypatch.setattr(vars(type(env))["TILELANG_DISABLE_CACHE"], "_forced_value", "0")
+    _set_cache_state(True)
+    with pytest.raises(RuntimeError, match="body failed"):
+        with tilelang.testing.without_kernel_cache():
+            raise RuntimeError("body failed")
+    assert CacheState.is_enabled() is True
+
+
+def test_without_kernel_cache_scopes_are_thread_local():
+    """Concurrent scopes must not share a stack entry."""
+    import threading
+
+    initially_enabled = CacheState.is_enabled()
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def worker():
+        try:
+            barrier.wait()
+            with tilelang.testing.without_kernel_cache():
+                assert CacheState.is_enabled() is False
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors, errors
+    assert CacheState.is_enabled() is initially_enabled

@@ -1,5 +1,7 @@
 from __future__ import annotations
+import contextvars
 import importlib.metadata
+import itertools
 import json
 import math
 import sys
@@ -8,6 +10,7 @@ import pathlib
 import logging
 import shutil
 import glob
+import threading
 from dataclasses import dataclass
 from collections.abc import Callable, Mapping
 
@@ -222,8 +225,14 @@ class CacheState:
     """Class to manage global kernel caching state."""
 
     _enabled = True
-    _scope_counter = 0
-    _scope_stack: list[int] = []
+    _scope_ids = itertools.count(1)
+    _scope_stack: contextvars.ContextVar[tuple[int, ...]] = contextvars.ContextVar(
+        "tilelang_cache_scopes", default=()
+    )
+    _scope_count = 0
+    _scope_base = True
+    _scope_lock = threading.Lock()
+    _scope_cleanups: list[Callable[[int], None]] = []
 
     @classmethod
     def enable(cls):
@@ -241,6 +250,11 @@ class CacheState:
         return cls._enabled
 
     @classmethod
+    def register_scope_cleanup(cls, cleanup: Callable[[int], None]) -> None:
+        """Register a callback that removes entries owned by a scope."""
+        cls._scope_cleanups.append(cleanup)
+
+    @classmethod
     def begin_scope(cls) -> int:
         """Start a fresh-cache scope, returning its unique id.
 
@@ -248,21 +262,47 @@ class CacheState:
         a scope asks the JIT wrapper for a build that did not exist before the
         block, so the wrapper keys include this id.
         """
-        cls._scope_counter += 1
-        cls._scope_stack.append(cls._scope_counter)
-        return cls._scope_counter
+        stack = cls._scope_stack.get()
+        scope = next(cls._scope_ids)
+        cls._scope_stack.set(stack + (scope,))
+        with cls._scope_lock:
+            if cls._scope_count == 0:
+                cls._scope_base = cls._enabled
+            cls._scope_count += 1
+            cls._enabled = False
+        return scope
 
     @classmethod
     def end_scope(cls, scope: int) -> None:
-        """End *scope*, which must be the innermost active scope."""
-        if not cls._scope_stack or cls._scope_stack[-1] != scope:
-            raise RuntimeError("kernel-cache scopes must be exited in stack order")
-        cls._scope_stack.pop()
+        """End *scope*, which may be exited out of nesting order.
+
+        Scope ids are unique per context.  Removing by id keeps overlapping
+        contexts from failing cleanup; caching stays disabled while any scope
+        remains, and the state from before the first scope is restored when the
+        last one exits.
+        """
+        stack = cls._scope_stack.get()
+        if scope not in stack:
+            return
+        remaining = tuple(item for item in stack if item != scope)
+        cls._scope_stack.set(remaining)
+        with cls._scope_lock:
+            cls._scope_count = max(0, cls._scope_count - 1)
+            if cls._scope_count:
+                cls._enabled = False
+            else:
+                cls._enabled = cls._scope_base
+        for cleanup in tuple(cls._scope_cleanups):
+            try:
+                cleanup(scope)
+            except Exception:
+                logger.exception("kernel-cache scope cleanup failed")
 
     @classmethod
     def current_scope(cls) -> int | None:
         """Return the innermost fresh-cache scope id, if any."""
-        return cls._scope_stack[-1] if cls._scope_stack else None
+        stack = cls._scope_stack.get()
+        return stack[-1] if stack else None
 
 
 @dataclass

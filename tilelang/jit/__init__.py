@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import inspect
 import threading
+import weakref
 from typing import (
     Any,
     Generic,
@@ -48,6 +49,9 @@ TargetLike = str | dict[str, object] | Target
 _CallFormKey = tuple[tuple[Any, ...], tuple[tuple[str, Any], ...], int]
 _CALL_FORM_CACHE_MISS = object()
 _DEBUG_COMPILE_LOCK = threading.RLock()
+# Weak registry lets CacheState release per-scope wrapper entries without
+# importing this module back from env.py.
+_JIT_INSTANCES: "weakref.WeakValueDictionary[int, JITImpl]" = weakref.WeakValueDictionary()
 
 
 @dataclass
@@ -372,6 +376,7 @@ class JITImpl(Generic[_P, _KP, _T, _Ret]):
         self._kernel_cache: dict[tuple, Kernel] = {}
         self._call_form_cache: _CallFormCache = _CallFormCache()
         self._tuner_cache: dict[tuple, Kernel] = {}
+        _JIT_INSTANCES[id(self)] = self
 
     def _get_frontend_target_context(self):
         if self.target is None:
@@ -533,6 +538,20 @@ class JITImpl(Generic[_P, _KP, _T, _Ret]):
         # JIT functions that have no runtime tensor arguments to extract.
         return not has_tune_params and isinstance(self.func, JITFunc) and not self.func.tensor_args
 
+    def _clear_scope(self, scope: int) -> None:
+        """Drop entries compiled for one fresh-cache scope."""
+        for key in list(self._kernel_cache):
+            if isinstance(key, tuple) and len(key) == 2 and key[0] == scope:
+                del self._kernel_cache[key]
+        if self._call_form_cache.last_salt == scope:
+            self._call_form_cache.last_args = None
+            self._call_form_cache.last_kwargs = None
+            self._call_form_cache.last_salt = 0
+            self._call_form_cache.last_kernel = _CALL_FORM_CACHE_MISS
+        for key in list(self._call_form_cache.entries):
+            if isinstance(key, tuple) and len(key) == 3 and key[2] == scope:
+                del self._call_form_cache.entries[key]
+
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _Ret:
         # Separate out the tuning parameters from the user's kwargs
         # Whether to return the compile arguments (out_idx, target, target_host, etc.) for autotuner cache
@@ -587,6 +606,13 @@ class JITImpl(Generic[_P, _KP, _T, _Ret]):
         else:
             return kernel
 
+
+def _clear_jit_scope(scope: int) -> None:
+    for instance in list(_JIT_INSTANCES.values()):
+        instance._clear_scope(scope)
+
+
+CacheState.register_scope_cleanup(_clear_jit_scope)
 
 ExecutionBackend = Literal["auto", "tvm_ffi", "cython", "nvrtc", "torch", "cutedsl", "pto"]
 

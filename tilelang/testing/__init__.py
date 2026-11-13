@@ -50,17 +50,13 @@ def without_kernel_cache():
     kernel built earlier in the process. A cache state the caller had already
     disabled is restored on exit.
     """
-    enabled = CacheState.is_enabled()
     scope = CacheState.begin_scope()
-    CacheState.disable()
     try:
         yield
     finally:
+        # CacheState owns the pre-scope state and the scope cache cleanup.  Do
+        # not raise from cleanup here: a body exception must stay primary.
         CacheState.end_scope(scope)
-        if enabled:
-            CacheState.enable()
-        else:
-            CacheState.disable()
 
 
 def _check_is_gfx950() -> bool:
