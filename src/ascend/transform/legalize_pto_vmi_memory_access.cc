@@ -824,6 +824,30 @@ struct DescriptorPlan {
 
 Rejection AcceptPlan(arith::Analyzer *analyzer, const AccessAddress &address,
                      const DescriptorPlan &plan, int64_t low, int64_t high) {
+  // The descriptor extent is not enough: its physical envelope must also stay
+  // inside the buffer.  Without this, an assertion from a narrower branch can
+  // prove the descriptor positive while the unguarded access is out of bounds.
+  bool nonnegative_starts = true;
+  for (const PrimExpr &start : address.starts) {
+    if (!IsIntegerScalar(start) || !analyzer->CanProve(start >= 0)) {
+      nonnegative_starts = false;
+      break;
+    }
+  }
+  if (nonnegative_starts) {
+    std::optional<PrimExpr> source_relative =
+        RelativeOffset(address.buffer, address.starts);
+    std::optional<PrimExpr> buffer_span =
+        WholeBufferSpan(analyzer, address.buffer);
+    if (source_relative.has_value() && buffer_span.has_value() &&
+        (!analyzer->CanProve(source_relative.value() + IntConst(low) >= 0) ||
+         !analyzer->CanProve(source_relative.value() + IntConst(high) <=
+                             buffer_span.value()))) {
+      return {RejectionKind::kHigh,
+              "the access envelope exceeds the buffer's physical span"};
+    }
+  }
+
   std::optional<int64_t> constant = ConstInt(plan.extent);
   if (constant.has_value()) {
     if (constant.value() <= 0) {
