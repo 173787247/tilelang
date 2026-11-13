@@ -226,9 +226,7 @@ class CacheState:
 
     _enabled = True
     _scope_ids = itertools.count(1)
-    _scope_stack: contextvars.ContextVar[tuple[int, ...]] = contextvars.ContextVar(
-        "tilelang_cache_scopes", default=()
-    )
+    _scope_stack: contextvars.ContextVar[tuple[int, ...]] = contextvars.ContextVar("tilelang_cache_scopes", default=())
     _scope_count = 0
     _scope_base = True
     _scope_lock = threading.Lock()

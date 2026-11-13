@@ -51,7 +51,7 @@ _CALL_FORM_CACHE_MISS = object()
 _DEBUG_COMPILE_LOCK = threading.RLock()
 # Weak registry lets CacheState release per-scope wrapper entries without
 # importing this module back from env.py.
-_JIT_INSTANCES: "weakref.WeakValueDictionary[int, JITImpl]" = weakref.WeakValueDictionary()
+_JIT_INSTANCES: weakref.WeakValueDictionary[int, JITImpl] = weakref.WeakValueDictionary()
 
 
 @dataclass

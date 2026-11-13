@@ -123,10 +123,10 @@ def test_without_kernel_cache_releases_scoped_wrapper_entries(monkeypatch):
         build(128)
 
     assert build(128) is baseline
-    assert not any(isinstance(key, tuple) and len(key) == 2 and isinstance(key[0], int)
-                   for key in build._kernel_cache)
-    assert not any(isinstance(key, tuple) and len(key) == 3 and isinstance(key[2], int) and key[2] != 0
-                   for key in build._call_form_cache.entries)
+    assert not any(isinstance(key, tuple) and len(key) == 2 and isinstance(key[0], int) for key in build._kernel_cache)
+    assert not any(
+        isinstance(key, tuple) and len(key) == 3 and isinstance(key[2], int) and key[2] != 0 for key in build._call_form_cache.entries
+    )
 
 
 def test_without_kernel_cache_scopes_can_exit_out_of_order():
@@ -146,9 +146,8 @@ def test_without_kernel_cache_scopes_can_exit_out_of_order():
 def test_without_kernel_cache_preserves_body_exception(monkeypatch):
     monkeypatch.setattr(vars(type(env))["TILELANG_DISABLE_CACHE"], "_forced_value", "0")
     _set_cache_state(True)
-    with pytest.raises(RuntimeError, match="body failed"):
-        with tilelang.testing.without_kernel_cache():
-            raise RuntimeError("body failed")
+    with pytest.raises(RuntimeError, match="body failed"), tilelang.testing.without_kernel_cache():
+        raise RuntimeError("body failed")
     assert CacheState.is_enabled() is True
 
 
